@@ -1,0 +1,386 @@
+name: Otomatik APK ve AAB Olustur
+on:
+  push:
+    paths-ignore:
+      - "**.apk"
+      - "**.aab"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Depoyu Cek
+        uses: actions/checkout@v4
+
+      - name: JDK 17 Kur
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Projeyi Olustur ve APK AAB Derle
+        run: |
+          for z in *.zip; do
+            if [ -f "$z" ]; then unzip -o "$z"; fi
+          done
+
+          python3 - << 'PY'
+          import os, subprocess
+
+          for d in [
+              "app/src/main/assets",
+              "app/src/main/java/com/waveclean/pro",
+              "app/src/main/res/layout",
+              "app/src/main/res/values",
+          ]:
+              os.makedirs(d, exist_ok=True)
+
+          def write_clean(path, text):
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(text.strip() + "\n")
+
+          sdk_dir = os.environ.get("ANDROID_HOME") or "/usr/local/lib/android/sdk"
+          if os.path.isdir(sdk_dir):
+              write_clean("local.properties", f"sdk.dir={sdk_dir}")
+
+          write_clean("settings.gradle.kts", """
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "WaveCleanPro"
+          include(":app")
+          """)
+
+          write_clean("build.gradle.kts", """
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          """)
+
+          write_clean("gradle.properties", """
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          """)
+
+          if not os.path.exists("app/waveclean-release-key.jks"):
+              subprocess.run([
+                  "keytool", "-genkeypair", "-v",
+                  "-keystore", "app/waveclean-release-key.jks",
+                  "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+                  "-alias", "waveclean",
+                  "-storepass", "WaveClean2026!",
+                  "-keypass", "WaveClean2026!",
+                  "-dname", "CN=WaveClean, OU=Mobile, O=WaveClean, L=Gaziantep, ST=Gaziantep, C=TR"
+              ], check=True)
+
+          write_clean("app/build.gradle.kts", """
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.waveclean.pro"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.waveclean.pro"
+                  minSdk = 23
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0.0"
+              }
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("waveclean-release-key.jks")
+                      storePassword = "WaveClean2026!"
+                      keyAlias = "waveclean"
+                      keyPassword = "WaveClean2026!"
+                  }
+              }
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          dependencies {
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+              implementation("com.google.android.material:material:1.12.0")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+              implementation("com.google.android.gms:play-services-ads:23.3.0")
+          }
+          """)
+
+          write_clean("app/src/main/AndroidManifest.xml", """
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <application
+                  android:allowBackup="true"
+                  android:label="WaveClean"
+                  android:supportsRtl="true"
+                  android:hardwareAccelerated="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <meta-data
+                      android:name="com.google.android.gms.ads.APPLICATION_ID"
+                      android:value="ca-app-pub-8819233961749663~1707868640" />
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          """)
+
+          write_clean("app/src/main/res/layout/activity_main.xml", """
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="#060b14">
+              <WebView
+                  android:id="@+id/webView"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent" />
+          </FrameLayout>
+          """)
+
+          write_clean("app/src/main/java/com/waveclean/pro/MainActivity.kt", """
+          package com.waveclean.pro
+
+          import android.annotation.SuppressLint
+          import android.os.Bundle
+          import android.webkit.JavascriptInterface
+          import android.webkit.WebChromeClient
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import androidx.appcompat.app.AppCompatActivity
+          import com.google.android.gms.ads.AdError
+          import com.google.android.gms.ads.AdRequest
+          import com.google.android.gms.ads.FullScreenContentCallback
+          import com.google.android.gms.ads.LoadAdError
+          import com.google.android.gms.ads.MobileAds
+          import com.google.android.gms.ads.OnUserEarnedRewardListener
+          import com.google.android.gms.ads.rewarded.RewardedAd
+          import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+
+          class MainActivity : AppCompatActivity() {
+              private lateinit var webView: WebView
+              private var rewardedAd: RewardedAd? = null
+              private var isLoadingRewarded = false
+              private var isShowingAd = false
+              private val REWARDED_AD_UNIT_ID = "ca-app-pub-8819233961749663/5113916136"
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+                  webView = findViewById(R.id.webView)
+                  webView.settings.javaScriptEnabled = true
+                  webView.settings.domStorageEnabled = true
+                  webView.settings.mediaPlaybackRequiresUserGesture = false
+                  webView.webViewClient = WebViewClient()
+                  webView.webChromeClient = WebChromeClient()
+                  webView.addJavascriptInterface(AndroidAdMobBridge(), "AndroidAdMob")
+                  webView.loadUrl("file:///android_asset/index.html")
+
+                  CoroutineScope(Dispatchers.IO).launch {
+                      MobileAds.initialize(this@MainActivity) {
+                          runOnUiThread { loadRewardedAd() }
+                      }
+                  }
+              }
+
+              private fun loadRewardedAd() {
+                  if (isLoadingRewarded || rewardedAd != null) return
+                  isLoadingRewarded = true
+                  RewardedAd.load(this, REWARDED_AD_UNIT_ID, AdRequest.Builder().build(), object : RewardedAdLoadCallback() {
+                      override fun onAdFailedToLoad(adError: LoadAdError) {
+                          rewardedAd = null
+                          isLoadingRewarded = false
+                      }
+                      override fun onAdLoaded(ad: RewardedAd) {
+                          rewardedAd = ad
+                          isLoadingRewarded = false
+                      }
+                  })
+              }
+
+              private fun showAdForEveryAction(actionTag: String) {
+                  if (isShowingAd) return
+                  val currentAd = rewardedAd
+                  if (currentAd == null) {
+                      loadRewardedAd()
+                      return
+                  }
+                  isShowingAd = true
+                  currentAd.fullScreenContentCallback = object : FullScreenContentCallback() {
+                      override fun onAdDismissedFullScreenContent() {
+                          isShowingAd = false
+                          rewardedAd = null
+                          loadRewardedAd()
+                      }
+                      override fun onAdFailedToShowFullScreenContent(adError: AdError) {
+                          isShowingAd = false
+                          rewardedAd = null
+                          loadRewardedAd()
+                      }
+                  }
+                  currentAd.show(this, OnUserEarnedRewardListener {
+                      webView.evaluateJavascript("window.onAdMobRewardGranted && window.onAdMobRewardGranted('$actionTag');", null)
+                  })
+              }
+
+              inner class AndroidAdMobBridge {
+                  @JavascriptInterface
+                  fun triggerAdOnAction(actionTag: String) {
+                      runOnUiThread { showAdForEveryAction(actionTag) }
+                  }
+                  @JavascriptInterface
+                  fun showRewarded(modeName: String) {
+                      runOnUiThread { showAdForEveryAction(modeName) }
+                  }
+                  @JavascriptInterface
+                  fun showInterstitial() {
+                      runOnUiThread { showAdForEveryAction("cycle_complete") }
+                  }
+              }
+          }
+          """)
+
+          if not os.path.exists("app/src/main/assets/index.html"):
+              write_clean("app/src/main/assets/index.html", """
+          <!DOCTYPE html>
+          <html lang="tr">
+          <head>
+          <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+          <title>WaveClean</title>
+          <style>
+            *{box-sizing:border-box;user-select:none;-webkit-tap-highlight-color:transparent}
+            body{margin:0;background:#060b14;color:#f8fafc;font-family:system-ui,sans-serif;display:flex;flex-direction:column;min-height:100vh;padding:18px}
+            .hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+            .title{font-size:20px;font-weight:800;color:#38bdf8}
+            .badge{background:rgba(34,211,238,0.15);color:#22d3ee;padding:6px 12px;border-radius:99px;font-size:12px;font-weight:700}
+            .hero{background:linear-gradient(180deg,#0f172a,#090d16);border:1px solid #1e293b;border-radius:28px;padding:24px;text-align:center;margin-bottom:16px}
+            .btn-main{width:136px;height:136px;border-radius:50%;border:4px solid rgba(255,255,255,0.15);background:linear-gradient(135deg,#06b6d4,#2563eb);color:#fff;font-size:20px;font-weight:900;box-shadow:0 12px 32px rgba(6,182,212,0.4);margin:14px auto;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer}
+            .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+            .card{background:#0f172a;border:2px solid #1e293b;border-radius:18px;padding:14px;text-align:left;color:#fff;cursor:pointer}
+            .card.active{border-color:#06b6d4;background:rgba(6,182,212,0.12)}
+            .card h4{margin:6px 0 2px;font-size:14px}
+            .card p{margin:0;font-size:11px;color:#94a3b8}
+            .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}
+            .pill{background:#1e293b;border:0;color:#e2e8f0;padding:11px;border-radius:14px;font-weight:700;font-size:12px;cursor:pointer}
+          </style>
+          </head>
+          <body>
+            <div class="hdr">
+              <div><div class="title">WaveClean</div><div style="font-size:11px;color:#94a3b8">Akustik Su & Toz Temizleyici</div></div>
+              <div class="badge" id="hzBadge">165 Hz</div>
+            </div>
+            <div class="hero">
+              <div style="font-size:12px;color:#38bdf8;font-weight:700" id="statusTxt">Hazır • Telefonu Aşağı Tutun</div>
+              <button class="btn-main" onclick="toggleEject()"><span id="btnLbl">BAŞLAT</span><span style="font-size:11px;font-weight:500;margin-top:4px">Su Çıkar</span></button>
+              <div style="font-size:11px;color:#64748b">Sesi %100 açın ve hoparlörü yere çevirin</div>
+            </div>
+            <div class="grid">
+              <button class="card active" id="m1" onclick="setMode(165,'sine','m1')">💧 <h4>165 Hz Su Tahliye</h4><p>Standart su atma</p></button>
+              <button class="card" id="m2" onclick="setMode(180,'sawtooth','m2')">⚡ <h4>180 Hz Turbo Güç</h4><p>Yoğun su ve boğuk ses</p></button>
+              <button class="card" id="m3" onclick="setMode(300,'square','m3')">🌪️ <h4>300 Hz Toz Silkme</h4><p>Kare dalga temizlik</p></button>
+              <button class="card" id="m4" onclick="setMode(432,'sine','m4')">🎵 <h4>432 Hz Netlik</h4><p>Akustik kalibrasyon</p></button>
+            </div>
+            <div class="hero" style="padding:16px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:8px">🎧 Sağ / Sol Stereo & Netlik Testi</div>
+              <div class="row">
+                <button class="pill" onclick="testTone(440,-1)">Sol (L)</button>
+                <button class="pill" onclick="testTone(440,0)">Stereo</button>
+                <button class="pill" onclick="testTone(440,1)">Sağ (R)</button>
+              </div>
+            </div>
+            <script>
+              let ctx,osc,running=false,freq=165,wave='sine',timer;
+              function ad(tag){try{if(window.AndroidAdMob)window.AndroidAdMob.triggerAdOnAction(tag);}catch(e){}}
+              function setMode(f,w,id){
+                ad('mode_'+f);freq=f;wave=w;
+                document.getElementById('hzBadge').textContent=f+' Hz';
+                ['m1','m2','m3','m4'].forEach(k=>document.getElementById(k).className='card'+(k===id?' active':''));
+                if(running){stopSound();startSound();}
+              }
+              function toggleEject(){ad('eject_toggle');if(running)stopSound();else startSound();}
+              function startSound(){
+                ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+                if(ctx.state==='suspended')ctx.resume();
+                osc=ctx.createOscillator();osc.type=wave;osc.frequency.setValueAtTime(freq,ctx.currentTime);
+                osc.connect(ctx.destination);osc.start();running=true;
+                let p=0;document.getElementById('btnLbl').textContent='0%';
+                document.getElementById('statusTxt').textContent='Akustik Dalga Aktif ('+freq+' Hz)';
+                timer=setInterval(()=>{p+=4;document.getElementById('btnLbl').textContent=p+'%';if(p>=100){stopSound();ad('complete');}},600);
+              }
+              function stopSound(){
+                clearInterval(timer);if(osc){try{osc.stop();osc.disconnect();}catch(e){}osc=null;}
+                running=false;document.getElementById('btnLbl').textContent='BAŞLAT';
+                document.getElementById('statusTxt').textContent='Temizlik Tamamlandı ✓';
+              }
+              function testTone(f,pan){
+                ad('test_'+pan);stopSound();
+                ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+                osc=ctx.createOscillator();osc.frequency.setValueAtTime(f,ctx.currentTime);
+                if(ctx.createStereoPanner){const p=ctx.createStereoPanner();p.pan.setValueAtTime(pan,ctx.currentTime);osc.connect(p);p.connect(ctx.destination);}
+                else osc.connect(ctx.destination);
+                osc.start();setTimeout(()=>stopSound(),2000);
+              }
+            </script>
+          </body>
+          </html>
+          """)
+          PY
+
+          curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
+          unzip -q gradle.zip
+          ./gradle-8.7/bin/gradle :app:assembleRelease :app:bundleRelease --no-daemon --no-build-cache
+
+          cp app/build/outputs/apk/release/*.apk ./WaveClean-Imzali.apk
+          cp app/build/outputs/bundle/release/*.aab ./WaveClean-GooglePlay.aab
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f WaveClean-Imzali.apk WaveClean-GooglePlay.aab
+          git commit -m "Imzali APK ve Google Play AAB olusturuldu" || true
+          git push
